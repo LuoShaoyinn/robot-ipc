@@ -75,7 +75,10 @@ class HostVariable:
     data = _HostVariable()
 
     def __init__(self, name: str, max_size : int = 4096, data_format = None):
-        if data_format is not None:
+        if data_format == "numpy":
+            global numpy
+            import numpy
+        elif data_format is not None:
             max_size = ctypes.sizeof(data_format)
         self.name, self.max_size = name, max_size
         self.__p = robot_ipc_lib.link_host_variable(name.encode(), max_size)
@@ -98,6 +101,12 @@ class HostVariable:
             if data_len > self.max_size:
                 raise Exception(f"Data length {data_len} exceed max size")
             void_ptr = ctypes.c_char_p(data) # this avoid memcoping
+        elif self.data_format == "numpy":
+            data = numpy.ascontiguousarray(data).astype(numpy.float32)
+            void_ptr = data.ctypes.data_as(ctypes.POINTER(ctypes.c_void_p))
+            if data_len is None:
+                data_len = data.itemsize * len(data)
+            print(f"[*] numpy, {data_len}")
         else:
             void_ptr = ctypes.byref(data)
             if data_len is None:
@@ -112,6 +121,10 @@ class HostVariable:
             data_len = self.max_size
         robot_ipc_lib.read_host_variable(self.__p, \
                 self.__buffer, self.max_size, self.max_size)
+        if self.data_format == "numpy":
+            return numpy.frombuffer(self.__buffer, \
+                    dtype = numpy.float32, \
+                    count = self.max_size // 4)
         if self.data_format is not None:
             return self.data_format.from_buffer(self.__buffer)
         try:
