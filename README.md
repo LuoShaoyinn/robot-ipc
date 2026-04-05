@@ -60,3 +60,12 @@ Install the Python binding after building the shared library as above:
 cd robot_ipc
 pip install .
 ```
+
+* * *
+
+### CI / CD
+
+GitHub Actions is configured in `.github/workflows/ci.yml` with:
+
+- **Build + smoke tests:** Builds library and examples (`BUILD_EXAMPLE=ON`), then runs automated smoke tests based on your examples (`scripts/ci/run_example_smoke_tests.sh`).
+- **Style test:** Runs `clang-format` checks for changed C/C++ files (`scripts/ci/check_clang_format.sh`).

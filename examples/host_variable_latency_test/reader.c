@@ -7,7 +7,7 @@
 
 #include "host_variable.h"
 
-#define PAYLOAD_SIZE 1024 * 1024 * 10
+#define PAYLOAD_SIZE 1024
 
 struct data_pack {
     struct timespec ts;
