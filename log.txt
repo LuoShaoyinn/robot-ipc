@@ -1,0 +1,206 @@
+===============================================================================
+robot-ipc Data Corruption Audit
+===============================================================================
+
+This report covers potential DATA CORRUPTION issues found under src/.
+The `int` shift UB in host_variable.c (0xF used instead of 0xFull) is excluded
+per the author's request — it will be fixed separately.
+
+
+===============================================================================
+ISSUE 1  (DATA CORRUPTION — HIGH SEVERITY)
+Short pipe I/O mixes stale partial data with new data
+===============================================================================
+
+Files:
+  src/host_function_caller.c:90   (call_host_function)
+  src/host_function_caller.c:99   (get_response_host_function)
+  src/host_function_receiver.c:273 (__host_function_dispatcher read)
+  src/host_function_receiver.c:285 (__host_function_dispatcher write)
+
+The single-shot write()/read() calls on FIFOs do not handle partial I/O.
+On Linux, POSIX guarantees atomic pipe writes only up to PIPE_BUF (4096 bytes).
+For any payload larger than PIPE_BUF:
+
+  - write() may return a short count (e.g. 3000 of 5000 bytes written).
+    The function returns -1, but the 3000 bytes are already in the pipe.
+  - The caller retries or sends a new request, writing another 5000 bytes.
+  - The receiver's read(req_fd, buf, 5000) pulls 3000 stale bytes from the
+    first (failed) write + 2000 bytes from the new write = CORRUPTED DATA.
+
+The same applies in reverse for the response pipe.
+
+Scenario:
+  1. Caller sends 8192-byte argument.
+  2. write() returns 4096 (short write). call_host_function returns -1.
+  3. Caller sends a NEW 8192-byte argument (retry or different call).
+  4. Dispatcher reads 8192 bytes from pipe:
+     bytes [0..4095]   = tail of the OLD failed argument
+     bytes [4096..8191] = head of the NEW argument
+     → dispatcher calls the host function with mixed/corrupt data.
+
+Fix: Replace single-shot write/read with loops that handle partial I/O,
+or use a different IPC mechanism for large payloads (e.g. shared memory
+with length prefix, which the host_variable infrastructure already provides).
+
+
+===============================================================================
+ISSUE 2  (DATA CORRUPTION — MEDIUM SEVERITY)
+Static name_buf causes thread-unsafe pipe creation
+===============================================================================
+
+Files:
+  src/host_function_caller.c:39
+  src/host_function_receiver.c:166
+
+Both link_host_function() and attach_host_function_ex() use:
+    static char name_buf[256];   // or NAME_MAX_LENGTH
+
+If either function is called concurrently from multiple threads:
+  Thread A: sprintf(name_buf, ...func_A_req)
+  Thread B: sprintf(name_buf, ...func_B_req)   ← overwrites A's string
+  Thread A: _try_to_open_pipe(name_buf)         ← opens func_B's pipe!
+
+This causes:
+  - The caller sends requests to the wrong function.
+  - The dispatcher listens on the wrong pipe.
+  - Responses are routed to the wrong caller.
+  → Data is silently sent to / received from the wrong endpoint.
+
+Fix: Use a stack-allocated buffer instead of static.
+
+
+===============================================================================
+ISSUE 3  (MEMORY CORRUPTION — MEDIUM SEVERITY)
+Uninitialized SHM flags allow out-of-bounds write during creation race
+===============================================================================
+
+File:
+  src/host_variable.c:136-160  (link_host_variable)
+
+When two processes simultaneously link the same host variable:
+
+  Process A: shm_open(O_CREAT | O_EXCL) → succeeds, is_create = true
+  Process B: shm_open(O_CREAT | O_EXCL) → EEXIST
+  Process B: shm_open(O_RDWR) → opens the segment, is_create = false
+  Process B: ftruncate() → OK (same size, no-op)
+  Process B: mmap() → OK
+  Process B: returns immediately (skips initialization since is_create=false)
+  Process B: calls write_host_variable()
+
+At this point, the shared memory flags are still all-zero (from ftruncate),
+because Process A hasn't executed atomic_store(&p->flags, ...) yet.
+
+With flags = 0:
+  - Bits [56-63] = 0 (target = 0)
+  - Bits [0-15]  = 0 (all lock_cnt = 0)
+  - Bits [16-55] = 0 (the "unused" padding area is NOT set to all-1s)
+
+The free-buffer search in write_host_variable treats the ENTIRE flags
+as having free buffers. The mask 0x0011111111111111ull covers positions
+0,4,8,...,52. With all-zero flags, the OR-collapse is all-zero everywhere,
+so every position appears "free" (except old_target=0).
+
+__builtin_ctzll finds position 4 (buffer index 1) as the first free slot.
+This is within bounds. But if buffer 1 is claimed and promoted, the next
+writer could claim position 8, 12, 16, 20, ...
+
+Position 16 corresponds to "buffer 4" (index 4). But only SHM_BUFFER_CNT=4
+buffers were allocated (indices 0-3). Writing to index 4 computes:
+    p->data + 4 * size
+which is BEYOND the allocated shared memory → out-of-bounds write.
+
+This is a timing-dependent race: the window is between the creator's
+mmap() and the completion of flags initialization.
+
+Fix: Use an explicit initialization handshake (e.g. a separate init flag
+with atomic_flag, or always initialize flags regardless of is_create).
+
+
+===============================================================================
+ISSUE 4  (UNDEFINED BEHAVIOR — LOW-MEDIUM SEVERITY)
+__builtin_ctzll(0) when all buffers are busy
+===============================================================================
+
+File:
+  src/host_variable.c:264-268
+
+When all SHM_BUFFER_CNT buffers have non-zero lock_cnt, the argument to
+__builtin_ctzll() is 0. Per GCC docs, __builtin_ctzll(0) is undefined
+behavior. The guard `if(target4 > SHM_BUFFER_CNT * 4)` does not prevent
+this — it comes AFTER the UB call.
+
+In practice on x86-64 this usually returns 64 (undefined but harmless),
+but the compiler is free to assume it's never called with 0 and optimize
+accordingly, potentially removing the guard check entirely.
+
+Fix: Check the mask for zero BEFORE calling __builtin_ctzll:
+    uint64_t free_mask = ~(flags | ...) & 0x0011111111111111ull;
+    if (free_mask == 0) return -1;
+    target4 = __builtin_ctzll(free_mask);
+
+
+===============================================================================
+ISSUE 5  (MEMORY SAFETY — LOW SEVERITY)
+Uninitialized variable `p` in link_host_variable error path
+===============================================================================
+
+File:
+  src/host_variable.c:165-172
+
+If shm_open fails (fd < 0) or ftruncate fails, execution jumps to FAILED
+before `host_variable p = (host_variable)mmap(...)` is reached. The local
+variable `p` is then read at line 169 without initialization:
+
+    if ((void*)p != MAP_FAILED && p != NULL)
+        munmap(p, full_size);
+
+Reading an uninitialized pointer is undefined behavior. In practice it
+usually skips the munmap, but under optimization the compiler may assume
+the check is unreachable and eliminate it, or the garbage value may happen
+to satisfy the condition and call munmap on a random address.
+
+Fix: Initialize p to NULL at declaration or MAP_FAILED.
+
+
+===============================================================================
+ISSUE 6  (RESOURCE LEAK / LOW SEVERITY)
+Uninitialized res_fd in link_host_function error path
+===============================================================================
+
+File:
+  src/host_function_caller.c:40-66
+
+If req_fd creation fails (line 50-51), execution jumps to FAILED.
+At that point p->res_fd was never initialized. Line 63 reads:
+    if(p->res_fd > 0) close(p->res_fd);
+
+This may close an arbitrary file descriptor (UB from uninitialized read)
+or skip closing a valid one.
+
+Fix: Zero-initialize the struct with calloc or explicit init:
+    host_function_caller p = calloc(1, sizeof(struct _s_host_function_caller));
+
+
+===============================================================================
+SUMMARY
+===============================================================================
+
+ Issue | Severity | Type              | File
+-------|----------|-------------------|------------------------------
+  1    | HIGH     | Data corruption   | host_function_caller.c:90,99
+       |          |                   | host_function_receiver.c:273,285
+  2    | MEDIUM   | Data corruption   | host_function_caller.c:39
+       |          |                   | host_function_receiver.c:166
+  3    | MEDIUM   | Memory corruption | host_variable.c:136-160
+  4    | LOW-MED  | Undefined behavior| host_variable.c:264-268
+  5    | LOW      | Undefined behavior| host_variable.c:169
+  6    | LOW      | Resource leak     | host_function_caller.c:63
+
+Note: The core shared-memory lock-free algorithm in host_variable.c
+(read_host_variable / write_host_variable) appears correct:
+  - Writers only claim non-target buffers (excluded from search)
+  - Writers only clear their OWN nibble during promotion
+  - Readers lock the current target; their lock_cnt is always preserved
+  - No reader can be on a writer's in-progress buffer
+  - CAS loops guarantee atomicity of flag updates

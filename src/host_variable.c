@@ -191,7 +191,7 @@ int static inline __acquire_read_lock(host_variable p) {
         tmp = ((flags >> (target * 4)) & 0xF) + 1;
         if(tmp == 0x0) /* overflood */
             return -1; /* lock is full */
-        new_flags = ((flags & ~(0xF << (target*4))) | (tmp << (target*4)));
+        new_flags = ((flags & ~(0xFull << (target*4))) | ((uint64_t)tmp << (target*4)));
         /* atomic_compare_exchange_strong(*atomic, *expected, new) checks 
          * whether atomic variable equals to the expected value. If so, 
          * the atomic variable is set to new; otherwise, the expected value is
@@ -214,7 +214,7 @@ int static inline __release_read_lock(host_variable p, int target) {
         tmp = ((flags >> (target * 4)) & 0xF) - 1;
         if(tmp == 0xF) /* overflood */
             return -2; /* unknown error, maybe we can just set it to 0 here */
-        new_flags = ((flags & ~(0xF << (target*4))) | (tmp << (target*4)));
+        new_flags = ((flags & ~(0xFull << (target*4))) | ((uint64_t)tmp << (target*4)));
         if(atomic_compare_exchange_strong(&p->flags, &flags, new_flags))
             break;
     }
