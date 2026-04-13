@@ -16,6 +16,8 @@ void* foo(const void *args)
 
 int main(int argc, char **argv)
 {
+    (void)argc;
+    (void)argv;
     int ret;
     printf("host function receiver\n");
     

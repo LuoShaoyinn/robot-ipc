@@ -13,6 +13,8 @@ int* foo(int *data) {
 }
 
 int main(int argc, char **argv) {
+    (void)argc;
+    (void)argv;
     std::cout << "host function receiver" << std::endl;
 
     {

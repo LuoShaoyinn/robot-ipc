@@ -7,6 +7,8 @@
 
 int main(int argc, char **argv)
 {
+    (void)argc;
+    (void)argv;
     host_variable x;
     x = link_host_variable("host_variable", sizeof(int));
     if(x == NULL) {

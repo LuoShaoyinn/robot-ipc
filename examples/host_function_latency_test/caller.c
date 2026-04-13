@@ -7,6 +7,8 @@
 
 int main(int argc, char **argv)
 {
+    (void)argc;
+    (void)argv;
     printf("host function caller\n");
     host_function_caller x;
     x = link_host_function("stress_test", sizeof(struct timespec), 0);
@@ -28,4 +30,3 @@ int main(int argc, char **argv)
     unlink_host_function(x);
     return 0;
 }
-

@@ -66,7 +66,7 @@ _Static_assert(sizeof(((struct _s_host_variable *)0)->meta) == 256,
     (sizeof(struct _s_host_variable) + size * SHM_BUFFER_CNT)
 
 
-static uint64_t inline
+static inline uint64_t
 get_compressed_timestamp()
 {
     struct timespec boot_ts; /* use boot time to avoid overflow */
@@ -192,6 +192,7 @@ FAILED:
 
 int unlink_host_variable(host_variable p, const char *name, const size_t size)
 {
+    (void)name;
     int ret = 0;
     ret |= munmap(p, FULL_SIZE(size));
    // ret |= shm_unlink(name);

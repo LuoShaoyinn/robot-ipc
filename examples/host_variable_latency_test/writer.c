@@ -14,6 +14,8 @@ struct data_pack {
 
 int main(int argc, char **argv)
 {
+    (void)argc;
+    (void)argv;
     host_variable x;
 
     x = link_host_variable("latency_test", sizeof(struct data_pack));
@@ -26,4 +28,3 @@ int main(int argc, char **argv)
     unlink_host_variable(x, "latency_test", sizeof(struct data_pack));
     return 0;
 }
-

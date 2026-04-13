@@ -256,7 +256,6 @@ __host_function_dispatcher(void *arg)
     host_function_dispatcher p = (host_function_dispatcher)arg;
 
     struct epoll_event events[MAX_EPOLL_EVENTS];
-    size_t args_sz, ret_sz;
     ssize_t bytes_read;
     uint64_t id;
     bool should_exit = false;
@@ -290,7 +289,7 @@ __host_function_dispatcher(void *arg)
                 /* Then read the real buffer */
                 void *arg_buffer = malloc(p->sz_arg[id]);
                 bytes_read = read(p->req_fd[id], arg_buffer, p->sz_arg[id]);
-                if(bytes_read != p->sz_arg[id]) {
+                if(bytes_read < 0 || (size_t)bytes_read != p->sz_arg[id]) {
                     /* Something wrong happened */
                     free(arg_buffer);
                     continue;
@@ -301,9 +300,10 @@ __host_function_dispatcher(void *arg)
 
                 /* Write to the response pipe if there is returning value */
                 if(ret_buffer != NULL && p->sz_ret[id]) {
-                    if(write(p->res_fd[id], ret_buffer, p->sz_ret[id]) != \
-                            p->sz_ret[id])
-                        ; /* some error may ocurr, but I don't know what to do */
+                    ssize_t written = write(p->res_fd[id], ret_buffer, p->sz_ret[id]);
+                    if (written < 0 || (size_t)written != p->sz_ret[id]) {
+                        /* some error may ocurr, but I don't know what to do */
+                    }
                 }
 
                 free(arg_buffer);

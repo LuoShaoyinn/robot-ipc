@@ -100,7 +100,8 @@ unlink_host_function(host_function_caller p)
 int
 call_host_function(host_function_caller p, const void *arg)
 {
-    if(write(p->req_fd, arg, p->sz_arg) != p->sz_arg)
+    ssize_t written = write(p->req_fd, arg, p->sz_arg);
+    if (written < 0 || (size_t)written != p->sz_arg)
         return -1;
     return 0;
 }
@@ -109,7 +110,8 @@ call_host_function(host_function_caller p, const void *arg)
 int
 get_response_host_function(host_function_caller p, void *ret)
 {
-    if(read(p->res_fd, ret, p->sz_ret) != p->sz_ret)
+    ssize_t nread = read(p->res_fd, ret, p->sz_ret);
+    if (nread < 0 || (size_t)nread != p->sz_ret)
         return -1;
     return 0;
 }
