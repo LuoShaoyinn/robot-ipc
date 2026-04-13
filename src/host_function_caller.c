@@ -41,7 +41,7 @@ host_function_caller
 link_host_function(const char *name, const size_t sz_arg, const size_t sz_ret) 
 {
     char name_buf[256];
-    host_function_caller p = malloc(sizeof(struct _s_host_function_caller));
+    host_function_caller p = calloc(1, sizeof(struct _s_host_function_caller));
     if (!p)
         return NULL;
     if (sz_arg > PIPE_BUF || sz_ret > PIPE_BUF) {

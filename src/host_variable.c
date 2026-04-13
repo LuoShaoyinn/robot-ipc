@@ -120,6 +120,7 @@ host_variable link_host_variable(const char *name, const size_t size)
      *     shm_open: create or open a POSIX shared memory object
      *     0600: read and write permissions for the owner */
     const size_t full_size = FULL_SIZE(size);
+    host_variable p = NULL;
     int fd = shm_open(name, O_CREAT | O_EXCL | O_RDWR, 0600);
     bool is_create = true;
     if(fd < 0) {
@@ -137,7 +138,7 @@ host_variable link_host_variable(const char *name, const size_t size)
         goto FAILED;
     
     // Map it into process's memory 
-    host_variable p = (host_variable)mmap(
+    p = (host_variable)mmap(
         NULL, 
         full_size, 
         PROT_READ | PROT_WRITE, 
