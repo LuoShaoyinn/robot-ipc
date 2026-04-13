@@ -10,3 +10,4 @@ build-*/
 *.egg-info/
 .cache/
 .ruff_cache/
+.codex
