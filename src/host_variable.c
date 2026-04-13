@@ -26,6 +26,12 @@ void (*_host_variable_next_handler)(int);
 #endif
 
 struct _s_host_variable {
+    /* fixed-size metadata area reserved for future coordination fields */
+    struct {
+        atomic_uint_least32_t created;
+        uint8_t reserved[256 - sizeof(atomic_uint_least32_t)];
+    } meta;
+
     /* atomic_* is the newest feature in C11, providing a series of 
      * atomic operation at the aims of replacing mutex. To make use of 
      * this, all states should be compressed into a uint64 flags. 
@@ -51,6 +57,9 @@ struct _s_host_variable {
      * directly ( must be allocated manually ) */
     uint8_t data[];
 };
+
+_Static_assert(sizeof(((struct _s_host_variable *)0)->meta) == 256,
+        "host_variable meta must be exactly 256 bytes");
 
 
 #define FULL_SIZE(size) \
@@ -151,6 +160,8 @@ host_variable link_host_variable(const char *name, const size_t size)
 
     // Initialize the flags
     if(is_create) { 
+        atomic_store_explicit(&p->meta.created, 0, memory_order_relaxed);
+
         /* set flags to 0b11..1110000 */
         atomic_store(&p->flags, ((((1ull << (14 - SHM_BUFFER_CNT)*4) - 1) \
                     << (SHM_BUFFER_CNT*4))));
@@ -158,6 +169,11 @@ host_variable link_host_variable(const char *name, const size_t size)
         /* timestamp to 0b00..0000000 */
         for(uint8_t i = 0; i < SHM_BUFFER_CNT; ++i)
             atomic_store(&p->timestamp[i], 0);
+
+        atomic_store_explicit(&p->meta.created, 1, memory_order_release);
+    } else {
+        while(atomic_load_explicit(&p->meta.created, memory_order_acquire) == 0)
+            usleep(1000);
     }
 
     close(fd); /* we can just close the file descripter after mmap */
