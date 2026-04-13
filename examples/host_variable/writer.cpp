@@ -4,6 +4,8 @@
 
 
 int main(int argc, char **argv) {
+    (void)argc;
+    (void)argv;
     RobotIPC::HostVariable<int> x("host_variable");
     x.write(100);
     std::cout << "Write data = 100" << std::endl;

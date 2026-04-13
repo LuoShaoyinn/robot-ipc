@@ -16,11 +16,13 @@ struct data_pack {
 
 int main(int argc, char **argv)
 {
+    (void)argc;
+    (void)argv;
     host_variable x;
 
     x = link_host_variable("latency_test", sizeof(struct data_pack));
 
-    struct timespec ts, ns, ts1, ns1;
+    struct timespec ts, ts1, ns1;
     int64_t diff, diff1;
 
     char *ptr = malloc(sizeof(struct data_pack));

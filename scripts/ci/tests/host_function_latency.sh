@@ -39,3 +39,4 @@ if ! assert_timeout_or_zero "${receiver_rc}"; then
 fi
 
 assert_log_has "latency =" "${ROBOT_IPC_LOG_DIR}/hf_latency_receiver.log"
+echo "[metric] host_function latency: $(grep -m1 'latency =' "${ROBOT_IPC_LOG_DIR}/hf_latency_receiver.log")"

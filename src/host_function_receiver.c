@@ -6,6 +6,7 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <limits.h>
 
 #include <sys/stat.h>
 #include <sys/epoll.h>
@@ -15,6 +16,9 @@
 #include "host_function_receiver.h"
 #include "config.h"
 
+#ifndef PIPE_BUF
+#error "PIPE_BUF is not defined by limits.h on this platform."
+#endif
 
 #define _DISPATCHER_EXIT        -1
 #define _DISPATCHER_SUSPEND     -2
@@ -77,13 +81,25 @@ create_host_function_dispatcher(const size_t n)
     p->cnt_func = 0;
     p->req_fd = malloc(n * sizeof(int));
     p->res_fd = malloc(n * sizeof(int));
-    p->foo = malloc(n * sizeof(host_function_ex));
-    p->foo_user_data = malloc(n * sizeof(void *));
+    p->foo =    malloc(n * sizeof(host_function_ex));
+    p->foo_user_data =      malloc(n * sizeof(void *));
     p->foo_owns_user_data = malloc(n * sizeof(uint8_t));
     p->sz_arg = malloc(n * sizeof(size_t));
     p->sz_ret = malloc(n * sizeof(size_t));
+
+    if(!p->req_fd || !p->res_fd || !p->foo || !p->foo_user_data || \
+            !p->foo_owns_user_data || !p->sz_arg || !p->sz_ret)
+        goto FAILED_MALLOC; /* cannot malloc memory for function info */
     return p;
 
+FAILED_MALLOC:
+    if(p->req_fd)   free(p->req_fd);
+    if(p->res_fd)   free(p->res_fd);
+    if(p->foo)      free(p->foo);
+    if(p->foo_user_data)        free(p->foo_user_data);
+    if(p->foo_owns_user_data)   free(p->foo_owns_user_data);
+    if(p->sz_arg)   free(p->sz_arg);
+    if(p->sz_ret)   free(p->sz_ret);
 FAILED_PTHREAD:
 FAILED_EPOLL_CTL:
     close(p->epoll_fd);
@@ -129,7 +145,7 @@ delete_host_function_dispatcher(host_function_dispatcher p)
 }
 
 
-int static inline
+static inline int
 _try_to_open_pipe(const char *name)
 {
     /* Try to create first, then open it if already exists */
@@ -149,6 +165,9 @@ attach_host_function_ex(host_function_dispatcher p, \
         const size_t sz_arg, const size_t sz_ret)
 {
     int err_code = 0;
+    if (sz_arg > PIPE_BUF || sz_ret > PIPE_BUF)
+        return -5;
+
     int id = p->cnt_func++;
     p->sz_arg[id] = sz_arg;
     p->sz_ret[id] = sz_ret;
@@ -163,7 +182,7 @@ attach_host_function_ex(host_function_dispatcher p, \
     }
 
     /* open the pipes first */
-    static char name_buf[NAME_MAX_LENGTH];
+    char name_buf[NAME_MAX_LENGTH];
     sprintf(name_buf, PIPE_NAME_PREFIX "%s_req", name);
     if((p->req_fd[id] = _try_to_open_pipe(name_buf)) < 0) {
         err_code = -2;
@@ -237,7 +256,6 @@ __host_function_dispatcher(void *arg)
     host_function_dispatcher p = (host_function_dispatcher)arg;
 
     struct epoll_event events[MAX_EPOLL_EVENTS];
-    size_t args_sz, ret_sz;
     ssize_t bytes_read;
     uint64_t id;
     bool should_exit = false;
@@ -271,7 +289,7 @@ __host_function_dispatcher(void *arg)
                 /* Then read the real buffer */
                 void *arg_buffer = malloc(p->sz_arg[id]);
                 bytes_read = read(p->req_fd[id], arg_buffer, p->sz_arg[id]);
-                if(bytes_read != p->sz_arg[id]) {
+                if(bytes_read < 0 || (size_t)bytes_read != p->sz_arg[id]) {
                     /* Something wrong happened */
                     free(arg_buffer);
                     continue;
@@ -282,9 +300,10 @@ __host_function_dispatcher(void *arg)
 
                 /* Write to the response pipe if there is returning value */
                 if(ret_buffer != NULL && p->sz_ret[id]) {
-                    if(write(p->res_fd[id], ret_buffer, p->sz_ret[id]) != \
-                            p->sz_ret[id])
-                        ; /* some error may ocurr, but I don't know what to do */
+                    ssize_t written = write(p->res_fd[id], ret_buffer, p->sz_ret[id]);
+                    if (written < 0 || (size_t)written != p->sz_ret[id]) {
+                        /* some error may ocurr, but I don't know what to do */
+                    }
                 }
 
                 free(arg_buffer);

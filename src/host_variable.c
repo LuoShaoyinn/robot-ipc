@@ -26,6 +26,12 @@ void (*_host_variable_next_handler)(int);
 #endif
 
 struct _s_host_variable {
+    /* fixed-size metadata area reserved for future coordination fields */
+    struct {
+        atomic_uint_least32_t created;
+        uint8_t reserved[256 - sizeof(atomic_uint_least32_t)];
+    } meta;
+
     /* atomic_* is the newest feature in C11, providing a series of 
      * atomic operation at the aims of replacing mutex. To make use of 
      * this, all states should be compressed into a uint64 flags. 
@@ -52,12 +58,15 @@ struct _s_host_variable {
     uint8_t data[];
 };
 
+_Static_assert(sizeof(((struct _s_host_variable *)0)->meta) == 256,
+        "host_variable meta must be exactly 256 bytes");
+
 
 #define FULL_SIZE(size) \
     (sizeof(struct _s_host_variable) + size * SHM_BUFFER_CNT)
 
 
-static uint64_t inline
+static inline uint64_t
 get_compressed_timestamp()
 {
     struct timespec boot_ts; /* use boot time to avoid overflow */
@@ -120,6 +129,7 @@ host_variable link_host_variable(const char *name, const size_t size)
      *     shm_open: create or open a POSIX shared memory object
      *     0600: read and write permissions for the owner */
     const size_t full_size = FULL_SIZE(size);
+    host_variable p = NULL;
     int fd = shm_open(name, O_CREAT | O_EXCL | O_RDWR, 0600);
     bool is_create = true;
     if(fd < 0) {
@@ -137,7 +147,7 @@ host_variable link_host_variable(const char *name, const size_t size)
         goto FAILED;
     
     // Map it into process's memory 
-    host_variable p = (host_variable)mmap(
+    p = (host_variable)mmap(
         NULL, 
         full_size, 
         PROT_READ | PROT_WRITE, 
@@ -150,6 +160,8 @@ host_variable link_host_variable(const char *name, const size_t size)
 
     // Initialize the flags
     if(is_create) { 
+        atomic_store_explicit(&p->meta.created, 0, memory_order_relaxed);
+
         /* set flags to 0b11..1110000 */
         atomic_store(&p->flags, ((((1ull << (14 - SHM_BUFFER_CNT)*4) - 1) \
                     << (SHM_BUFFER_CNT*4))));
@@ -157,6 +169,11 @@ host_variable link_host_variable(const char *name, const size_t size)
         /* timestamp to 0b00..0000000 */
         for(uint8_t i = 0; i < SHM_BUFFER_CNT; ++i)
             atomic_store(&p->timestamp[i], 0);
+
+        atomic_store_explicit(&p->meta.created, 1, memory_order_release);
+    } else {
+        while(atomic_load_explicit(&p->meta.created, memory_order_acquire) == 0)
+            usleep(1000);
     }
 
     close(fd); /* we can just close the file descripter after mmap */
@@ -175,6 +192,7 @@ FAILED:
 
 int unlink_host_variable(host_variable p, const char *name, const size_t size)
 {
+    (void)name;
     int ret = 0;
     ret |= munmap(p, FULL_SIZE(size));
    // ret |= shm_unlink(name);
@@ -182,7 +200,7 @@ int unlink_host_variable(host_variable p, const char *name, const size_t size)
 }
 
 
-int static inline __acquire_read_lock(host_variable p) {
+static inline int __acquire_read_lock(host_variable p) {
     int target;
     uint64_t flags, tmp, new_flags;
     flags = atomic_load(&p->flags);
@@ -191,7 +209,7 @@ int static inline __acquire_read_lock(host_variable p) {
         tmp = ((flags >> (target * 4)) & 0xF) + 1;
         if(tmp == 0x0) /* overflood */
             return -1; /* lock is full */
-        new_flags = ((flags & ~(0xF << (target*4))) | (tmp << (target*4)));
+        new_flags = ((flags & ~(0xFull << (target*4))) | ((uint64_t)tmp << (target*4)));
         /* atomic_compare_exchange_strong(*atomic, *expected, new) checks 
          * whether atomic variable equals to the expected value. If so, 
          * the atomic variable is set to new; otherwise, the expected value is
@@ -205,7 +223,7 @@ int static inline __acquire_read_lock(host_variable p) {
 }
 
 
-int static inline __release_read_lock(host_variable p, int target) {
+static inline int __release_read_lock(host_variable p, int target) {
     /* reduce the lock_cnt for the target buffer. Be careful that we
      * shouldn't get the latest target here. */
     uint64_t flags, tmp, new_flags;
@@ -214,7 +232,7 @@ int static inline __release_read_lock(host_variable p, int target) {
         tmp = ((flags >> (target * 4)) & 0xF) - 1;
         if(tmp == 0xF) /* overflood */
             return -2; /* unknown error, maybe we can just set it to 0 here */
-        new_flags = ((flags & ~(0xF << (target*4))) | (tmp << (target*4)));
+        new_flags = ((flags & ~(0xFull << (target*4))) | ((uint64_t)tmp << (target*4)));
         if(atomic_compare_exchange_strong(&p->flags, &flags, new_flags))
             break;
     }
@@ -250,7 +268,7 @@ int write_host_variable(host_variable p, const void *data, \
 {
     int target4; /* 4-times of the target buffer we're going to write to */
     int old_target; /* the current target buffer for reading */
-    uint64_t flags, new_flags;
+    uint64_t flags, new_flags, free_mask;
     uint64_t timestamp = get_compressed_timestamp(); /* time since boot */
     
 #ifndef NDEBUG
@@ -261,12 +279,12 @@ int write_host_variable(host_variable p, const void *data, \
     flags = atomic_load(&p->flags);
     while(true) {
         old_target = (flags >> 56ull);
-        target4 = __builtin_ctzll( \
-                ~(flags | (flags >> 1) | (flags >> 2) | (flags >> 3) \
+        free_mask = ~(flags | (flags >> 1) | (flags >> 2) | (flags >> 3) \
                     | (0xFull << old_target*4)) \
-                & 0x0011111111111111ull);
-        if(target4 > SHM_BUFFER_CNT * 4)
+                & 0x0011111111111111ull;
+        if(free_mask == 0)
             return -1; /* all buffers are full */
+        target4 = __builtin_ctzll(free_mask);
         new_flags = (flags | (0x1ull << target4));
         if(atomic_compare_exchange_strong(&p->flags, &flags, new_flags))
             break;

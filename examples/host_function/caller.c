@@ -6,6 +6,8 @@
 
 int main(int argc, char **argv)
 {
+    (void)argc;
+    (void)argv;
     srand(time(0));
 
     printf("host function caller\n");
@@ -30,4 +32,3 @@ int main(int argc, char **argv)
     unlink_host_function(x);
     return 0;
 }
-

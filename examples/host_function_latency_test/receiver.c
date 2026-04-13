@@ -40,6 +40,8 @@ void *foo(const void *args)
 
 int main(int argc, char **argv)
 {
+    (void)argc;
+    (void)argv;
     printf("host function receiver\n");
     
     /* first create a dispatcher */

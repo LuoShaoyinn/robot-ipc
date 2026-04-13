@@ -6,6 +6,8 @@
 #include <robot_ipc.hpp>
 
 int main(int argc, char **argv) {
+    (void)argc;
+    (void)argv;
     std::cout << "HostFunctionCaller" << std::endl;
     std::random_device rd;
     std::mt19937 gen(rd());

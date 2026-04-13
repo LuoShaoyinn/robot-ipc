@@ -38,6 +38,8 @@ void *thread_main(void *args)
 
 int main(int argc, char **argv)
 {
+    (void)argc;
+    (void)argv;
     srand(time(NULL));
     x = link_host_variable("test", sizeof(struct data_pack));
 

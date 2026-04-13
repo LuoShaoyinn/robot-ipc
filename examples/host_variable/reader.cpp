@@ -6,6 +6,8 @@
 
 
 int main(int argc, char **argv) {
+    (void)argc;
+    (void)argv;
     RobotIPC::HostVariable<int> x("host_variable");
 
     std::cout << "Reader started" << std::endl;

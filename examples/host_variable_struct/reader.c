@@ -27,6 +27,8 @@ struct __attribute__((__packed__)) DataFormat
 
 int main(int argc, char **argv)
 {
+    (void)argc;
+    (void)argv;
     data = (struct DataFormat*)malloc(sizeof(struct DataFormat) + 32);
 
     host_variable x;
