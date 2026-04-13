@@ -77,13 +77,25 @@ create_host_function_dispatcher(const size_t n)
     p->cnt_func = 0;
     p->req_fd = malloc(n * sizeof(int));
     p->res_fd = malloc(n * sizeof(int));
-    p->foo = malloc(n * sizeof(host_function_ex));
-    p->foo_user_data = malloc(n * sizeof(void *));
+    p->foo =    malloc(n * sizeof(host_function_ex));
+    p->foo_user_data =      malloc(n * sizeof(void *));
     p->foo_owns_user_data = malloc(n * sizeof(uint8_t));
     p->sz_arg = malloc(n * sizeof(size_t));
     p->sz_ret = malloc(n * sizeof(size_t));
+
+    if(!p->req_fd || !p->res_fd || !p->foo || !p->foo_user_data || \
+            !p->foo_owns_user_data || !p->sz_arg || !p->sz_ret)
+        goto FAILED_MALLOC; /* cannot malloc memory for function info */
     return p;
 
+FAILED_MALLOC:
+    if(p->req_fd)   free(p->req_fd);
+    if(p->res_fd)   free(p->res_fd);
+    if(p->foo)      free(p->foo);
+    if(p->foo_user_data)        free(p->foo_user_data);
+    if(p->foo_owns_user_data)   free(p->foo_owns_user_data);
+    if(p->sz_arg)   free(p->sz_arg);
+    if(p->sz_ret)   free(p->sz_ret);
 FAILED_PTHREAD:
 FAILED_EPOLL_CTL:
     close(p->epoll_fd);
