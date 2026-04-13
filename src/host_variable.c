@@ -250,7 +250,7 @@ int write_host_variable(host_variable p, const void *data, \
 {
     int target4; /* 4-times of the target buffer we're going to write to */
     int old_target; /* the current target buffer for reading */
-    uint64_t flags, new_flags;
+    uint64_t flags, new_flags, free_mask;
     uint64_t timestamp = get_compressed_timestamp(); /* time since boot */
     
 #ifndef NDEBUG
@@ -261,12 +261,12 @@ int write_host_variable(host_variable p, const void *data, \
     flags = atomic_load(&p->flags);
     while(true) {
         old_target = (flags >> 56ull);
-        target4 = __builtin_ctzll( \
-                ~(flags | (flags >> 1) | (flags >> 2) | (flags >> 3) \
+        free_mask = ~(flags | (flags >> 1) | (flags >> 2) | (flags >> 3) \
                     | (0xFull << old_target*4)) \
-                & 0x0011111111111111ull);
-        if(target4 > SHM_BUFFER_CNT * 4)
+                & 0x0011111111111111ull;
+        if(free_mask == 0)
             return -1; /* all buffers are full */
+        target4 = __builtin_ctzll(free_mask);
         new_flags = (flags | (0x1ull << target4));
         if(atomic_compare_exchange_strong(&p->flags, &flags, new_flags))
             break;
