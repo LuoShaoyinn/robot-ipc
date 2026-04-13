@@ -23,7 +23,7 @@ struct _s_host_function_caller {
 };
 
 
-int static inline
+static inline int
 _try_to_open_pipe(const char *name)
 {
     /* Try to create first, then open it if already exists */

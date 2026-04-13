@@ -199,7 +199,7 @@ int unlink_host_variable(host_variable p, const char *name, const size_t size)
 }
 
 
-int static inline __acquire_read_lock(host_variable p) {
+static inline int __acquire_read_lock(host_variable p) {
     int target;
     uint64_t flags, tmp, new_flags;
     flags = atomic_load(&p->flags);
@@ -222,7 +222,7 @@ int static inline __acquire_read_lock(host_variable p) {
 }
 
 
-int static inline __release_read_lock(host_variable p, int target) {
+static inline int __release_read_lock(host_variable p, int target) {
     /* reduce the lock_cnt for the target buffer. Be careful that we
      * shouldn't get the latest target here. */
     uint64_t flags, tmp, new_flags;

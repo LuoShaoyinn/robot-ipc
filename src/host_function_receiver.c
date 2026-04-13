@@ -145,7 +145,7 @@ delete_host_function_dispatcher(host_function_dispatcher p)
 }
 
 
-int static inline
+static inline int
 _try_to_open_pipe(const char *name)
 {
     /* Try to create first, then open it if already exists */
