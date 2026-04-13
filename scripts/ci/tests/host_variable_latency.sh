@@ -32,3 +32,4 @@ if ! assert_timeout_or_zero "${reader_rc}"; then
 fi
 
 assert_log_has "ipc delay" "${ROBOT_IPC_LOG_DIR}/hv_latency_reader.log"
+echo "[metric] host_variable latency: $(grep -m1 'ipc delay' "${ROBOT_IPC_LOG_DIR}/hv_latency_reader.log")"
