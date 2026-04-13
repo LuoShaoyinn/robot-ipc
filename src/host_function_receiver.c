@@ -6,6 +6,7 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <limits.h>
 
 #include <sys/stat.h>
 #include <sys/epoll.h>
@@ -15,6 +16,9 @@
 #include "host_function_receiver.h"
 #include "config.h"
 
+#ifndef PIPE_BUF
+#error "PIPE_BUF is not defined by limits.h on this platform."
+#endif
 
 #define _DISPATCHER_EXIT        -1
 #define _DISPATCHER_SUSPEND     -2
@@ -161,6 +165,9 @@ attach_host_function_ex(host_function_dispatcher p, \
         const size_t sz_arg, const size_t sz_ret)
 {
     int err_code = 0;
+    if (sz_arg > PIPE_BUF || sz_ret > PIPE_BUF)
+        return -5;
+
     int id = p->cnt_func++;
     p->sz_arg[id] = sz_arg;
     p->sz_ret[id] = sz_ret;
@@ -175,7 +182,7 @@ attach_host_function_ex(host_function_dispatcher p, \
     }
 
     /* open the pipes first */
-    static char name_buf[NAME_MAX_LENGTH];
+    char name_buf[NAME_MAX_LENGTH];
     sprintf(name_buf, PIPE_NAME_PREFIX "%s_req", name);
     if((p->req_fd[id] = _try_to_open_pipe(name_buf)) < 0) {
         err_code = -2;

@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <limits.h>
 
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -12,6 +13,9 @@
 #include "host_function_caller.h"
 #include "config.h"
 
+#ifndef PIPE_BUF
+#error "PIPE_BUF is not defined by limits.h on this platform."
+#endif
 
 struct _s_host_function_caller {
     int req_fd, res_fd;
@@ -36,10 +40,19 @@ _try_to_open_pipe(const char *name)
 host_function_caller
 link_host_function(const char *name, const size_t sz_arg, const size_t sz_ret) 
 {
-    static char name_buf[256];
+    char name_buf[256];
     host_function_caller p = malloc(sizeof(struct _s_host_function_caller));
+    if (!p)
+        return NULL;
+    if (sz_arg > PIPE_BUF || sz_ret > PIPE_BUF) {
+        free(p);
+        errno = EMSGSIZE;
+        return NULL;
+    }
     p->sz_arg = sz_arg;
     p->sz_ret = sz_ret;
+    p->req_fd = -1;
+    p->res_fd = -1;
     
     /* make sure the path exists */
     if (mkdir(PIPE_NAME_PREFIX, 0700) != 0 && errno != EEXIST)
@@ -59,8 +72,8 @@ link_host_function(const char *name, const size_t sz_arg, const size_t sz_ret)
     return p;
 
 FAILED:
-    if(p->req_fd > 0) close(p->req_fd);
-    if(p->res_fd > 0) close(p->res_fd);
+    if(p->req_fd >= 0) close(p->req_fd);
+    if(p->res_fd >= 0) close(p->res_fd);
     free(p);
     return NULL;
 }
