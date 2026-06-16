@@ -18,7 +18,7 @@
  * same time. See producer-consumer problem for help.
  * The bitwise status of buffers and the pointer referring to 
  * the lastest buffer are compressed into a uin64. So, the 
- * number of buffers should not exceed 14. Recommand to be the 
+ * number of buffers should not exceed 15. Recommand to be the 
  * power of 2 ( for alignmen ). 
  */
 #define SHM_BUFFER_CNT 4
