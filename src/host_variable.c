@@ -39,8 +39,8 @@ struct _s_host_variable {
      * to the lastest (readable) buffer, and a lock_cnt for each buffer
      * to avoid conflict.
      *
-     * [0 - 3] [3 - 7] ... [52 - 55]: represent the lock_cnt for each buffer
-     * [56 - 63]: storing the 'target' pointer
+     * [0 - 3] [3 - 7] ... [56 - 60]: represent the lock_cnt for each buffer
+     * [60 - 63]: storing the 'target' pointer
      */
     atomic_uint_least64_t flags; 
 
@@ -162,8 +162,8 @@ host_variable link_host_variable(const char *name, const size_t size)
     if(is_create) { 
         atomic_store_explicit(&p->meta.created, 0, memory_order_relaxed);
 
-        /* set flags to 0b11..1110000 */
-        atomic_store(&p->flags, ((((1ull << (14 - SHM_BUFFER_CNT)*4) - 1) \
+        /* set flags to 0b0011..1110000 */
+        atomic_store(&p->flags, ((((1ull << (15 - SHM_BUFFER_CNT)*4) - 1) \
                     << (SHM_BUFFER_CNT*4))));
         
         /* timestamp to 0b00..0000000 */
@@ -205,9 +205,9 @@ static inline int __acquire_read_lock(host_variable p) {
     uint64_t flags, tmp, new_flags;
     flags = atomic_load(&p->flags);
     while(true) {
-        target = (flags >> 56);
+        target = (flags >> 60);
         tmp = ((flags >> (target * 4)) & 0xF) + 1;
-        if(tmp == 0x0) /* overflood */
+        if(tmp == 0xF) /* overflood, since 0xF means write lock */
             return -1; /* lock is full */
         new_flags = ((flags & ~(0xFull << (target*4))) | ((uint64_t)tmp << (target*4)));
         /* atomic_compare_exchange_strong(*atomic, *expected, new) checks 
@@ -230,8 +230,6 @@ static inline int __release_read_lock(host_variable p, int target) {
     flags = atomic_load(&p->flags);
     while(true) {
         tmp = ((flags >> (target * 4)) & 0xF) - 1;
-        if(tmp == 0xF) /* overflood */
-            return -2; /* unknown error, maybe we can just set it to 0 here */
         new_flags = ((flags & ~(0xFull << (target*4))) | ((uint64_t)tmp << (target*4)));
         if(atomic_compare_exchange_strong(&p->flags, &flags, new_flags))
             break;
@@ -250,6 +248,8 @@ int read_host_variable(host_variable p, void *buf, \
 
     /* add to the lock_cnt for the target buffer */
     int target = __acquire_read_lock(p);
+    if(target < 0)
+        return target;
      
     /* copy the data */
     memcpy(buf, p->data + target * size, op_size);    
@@ -278,14 +278,14 @@ int write_host_variable(host_variable p, const void *data, \
     /* first acquire a free buffer */
     flags = atomic_load(&p->flags);
     while(true) {
-        old_target = (flags >> 56ull);
+        old_target = (flags >> 60ull);
         free_mask = ~(flags | (flags >> 1) | (flags >> 2) | (flags >> 3) \
                     | (0xFull << old_target*4)) \
-                & 0x0011111111111111ull;
+                & 0x0111111111111111ull;
         if(free_mask == 0)
             return -1; /* all buffers are full */
         target4 = __builtin_ctzll(free_mask);
-        new_flags = (flags | (0x1ull << target4));
+        new_flags = (flags | (0xFull << target4));
         if(atomic_compare_exchange_strong(&p->flags, &flags, new_flags))
             break;
     }
@@ -298,7 +298,7 @@ int write_host_variable(host_variable p, const void *data, \
     /* finally set the buffer to free */
     flags = atomic_load(&p->flags);
     while(true) {
-        old_target = (flags >> 56ull);
+        old_target = (flags >> 60ull);
         if(atomic_load(&p->timestamp[old_target]) >= timestamp) {
             /* release the block we just acquire, cause we are not lastest */
             atomic_fetch_and(&p->flags, ~(0xFull << target4));
@@ -307,8 +307,8 @@ int write_host_variable(host_variable p, const void *data, \
         /* construct the new_flags. Set the highest 56-63 bit to the new
          * target, and set the lock_cnt of the target buffer (the one
          * we just wrote to ) to 0. */
-        new_flags = ((uint64_t)(target4>>2) << 56ull) \
-                    | (flags & 0x00FFFFFFFFFFFFFFull & ~(0xFull << target4));
+        new_flags = ((uint64_t)(target4>>2) << 60ull) \
+                    | (flags & 0x0FFFFFFFFFFFFFFFull & ~(0xFull << target4));
         if(atomic_compare_exchange_strong(&p->flags, &flags, new_flags))
             break;
     }
