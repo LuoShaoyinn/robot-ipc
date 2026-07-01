@@ -202,14 +202,14 @@ int unlink_host_variable(host_variable p, const char *name, const size_t size)
 
 static inline int __acquire_read_lock(host_variable p) {
     int target;
-    uint64_t flags, tmp, new_flags;
+    uint64_t flags, cnt, new_flags;
     flags = atomic_load(&p->flags);
     while(true) {
         target = (flags >> 60);
-        tmp = ((flags >> (target * 4)) & 0xF) + 1;
-        if(tmp == 0xF) /* overflood, since 0xF means write lock */
+        cnt = (flags >> (target * 4)) & 0xF;
+        if(cnt >= 0xE) /* 0xF means write lock; 0xE cannot be incremented */
             return -1; /* lock is full */
-        new_flags = ((flags & ~(0xFull << (target*4))) | ((uint64_t)tmp << (target*4)));
+        new_flags = ((flags & ~(0xFull << (target*4))) | ((cnt + 1) << (target*4)));
         /* atomic_compare_exchange_strong(*atomic, *expected, new) checks 
          * whether atomic variable equals to the expected value. If so, 
          * the atomic variable is set to new; otherwise, the expected value is
