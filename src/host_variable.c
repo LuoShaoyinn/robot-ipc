@@ -238,6 +238,49 @@ static inline int __release_read_lock(host_variable p, int target) {
 }
 
 
+static inline int __acquire_write_lock(host_variable p, int *old_target) {
+    int target4; /* 4-times of the target buffer we're going to write to */
+    uint64_t flags, new_flags, free_mask;
+
+    flags = atomic_load(&p->flags);
+    while(true) {
+        *old_target = (flags >> 60ull);
+        free_mask = ~(flags | (flags >> 1) | (flags >> 2) | (flags >> 3) \
+                    | (0xFull << (*old_target)*4)) \
+                & 0x0111111111111111ull;
+        if(free_mask == 0)
+            return -1; /* all buffers are full */
+        target4 = __builtin_ctzll(free_mask);
+        new_flags = (flags | (0xFull << target4));
+        if(atomic_compare_exchange_strong(&p->flags, &flags, new_flags))
+            break;
+    }
+    return target4;
+}
+
+
+static inline int __release_write_lock(
+        host_variable p, int target4, int old_target, uint64_t timestamp) {
+    uint64_t flags, new_flags, free_mask;
+    flags = atomic_load(&p->flags);
+    while(true) {
+        old_target = (flags >> 60ull);
+        if(atomic_load(&p->timestamp[old_target]) >= timestamp) {
+            /* release the block we just acquire, cause we are not lastest */
+            atomic_fetch_and(&p->flags, ~(0xFull << target4));
+            return 1;
+        }
+        /* construct the new_flags. Set the highest 56-63 bit to the new
+         * target, and set the lock_cnt of the target buffer (the one
+         * we just wrote to ) to 0. */
+        new_flags = ((uint64_t)(target4>>2) << 60ull) \
+                    | (flags & 0x0FFFFFFFFFFFFFFFull & ~(0xFull << target4));
+        if(atomic_compare_exchange_strong(&p->flags, &flags, new_flags))
+            break;
+    }
+    return 0;
+}
+
 
 int read_host_variable(host_variable p, void *buf, \
         const size_t size, const size_t op_size)
@@ -268,7 +311,6 @@ int write_host_variable(host_variable p, const void *data, \
 {
     int target4; /* 4-times of the target buffer we're going to write to */
     int old_target; /* the current target buffer for reading */
-    uint64_t flags, new_flags, free_mask;
     uint64_t timestamp = get_compressed_timestamp(); /* time since boot */
     
 #ifndef NDEBUG
@@ -276,42 +318,14 @@ int write_host_variable(host_variable p, const void *data, \
 #endif
 
     /* first acquire a free buffer */
-    flags = atomic_load(&p->flags);
-    while(true) {
-        old_target = (flags >> 60ull);
-        free_mask = ~(flags | (flags >> 1) | (flags >> 2) | (flags >> 3) \
-                    | (0xFull << old_target*4)) \
-                & 0x0111111111111111ull;
-        if(free_mask == 0)
-            return -1; /* all buffers are full */
-        target4 = __builtin_ctzll(free_mask);
-        new_flags = (flags | (0xFull << target4));
-        if(atomic_compare_exchange_strong(&p->flags, &flags, new_flags))
-            break;
-    }
+    target4 = __acquire_write_lock(p, &old_target);
     
-
     /* then memcopy */
     p->timestamp[target4>>2] = timestamp;
     memcpy(p->data + (target4>>2) * size, data, op_size);
 
     /* finally set the buffer to free */
-    flags = atomic_load(&p->flags);
-    while(true) {
-        old_target = (flags >> 60ull);
-        if(atomic_load(&p->timestamp[old_target]) >= timestamp) {
-            /* release the block we just acquire, cause we are not lastest */
-            atomic_fetch_and(&p->flags, ~(0xFull << target4));
-            return 1;
-        }
-        /* construct the new_flags. Set the highest 56-63 bit to the new
-         * target, and set the lock_cnt of the target buffer (the one
-         * we just wrote to ) to 0. */
-        new_flags = ((uint64_t)(target4>>2) << 60ull) \
-                    | (flags & 0x0FFFFFFFFFFFFFFFull & ~(0xFull << target4));
-        if(atomic_compare_exchange_strong(&p->flags, &flags, new_flags))
-            break;
-    }
+    __release_write_lock(p, target4, old_target, timestamp);
     
 #ifndef NDEBUG
     _host_variable_should_wait = 0;
