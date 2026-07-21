@@ -18,6 +18,7 @@
 #include "robot_ipc_constant.h"
 #include "host_variable.h"
 #include "config.h"
+#include "version.h"
 
 #ifndef NDEBUG
 /* the variable to indicate whether we should ignore the ctrl-C signal */
@@ -29,7 +30,8 @@ struct _s_host_variable {
     /* fixed-size metadata area reserved for future coordination fields */
     struct {
         atomic_uint_least32_t created;
-        uint8_t reserved[256 - sizeof(atomic_uint_least32_t)];
+        char git_commit_hash[8];
+        uint8_t reserved[256 - sizeof(atomic_uint_least32_t) - 8];
     } meta;
 
     /* atomic_* is the newest feature in C11, providing a series of 
@@ -159,21 +161,31 @@ host_variable link_host_variable(const char *name, const size_t size)
         goto FAILED;
 
     // Initialize the flags
-    if(is_create) { 
+    if(is_create) {  // we are creating a new varible
         atomic_store_explicit(&p->meta.created, 0, memory_order_relaxed);
 
         /* set flags to 0b0011..1110000 */
         atomic_store(&p->flags, ((((1ull << (15 - SHM_BUFFER_CNT)*4) - 1) \
                     << (SHM_BUFFER_CNT*4))));
         
+        /* set git commit hash */
+        strcpy(p->meta.git_commit_hash, GIT_COMMIT_HASH);
+        
         /* timestamp to 0b00..0000000 */
         for(uint8_t i = 0; i < SHM_BUFFER_CNT; ++i)
             atomic_store(&p->timestamp[i], 0);
 
         atomic_store_explicit(&p->meta.created, 1, memory_order_release);
-    } else {
+    } else { // we are connecting to an existing variable
+        /* wait for created */
         while(atomic_load_explicit(&p->meta.created, memory_order_acquire) == 0)
             usleep(1000);
+
+        if(strcmp(p->meta.git_commit_hash, GIT_COMMIT_HASH) != 0) {
+            fprintf(stderr, "git commit hash: %s, expected: %s\n", \
+                    p->meta.git_commit_hash, GIT_COMMIT_HASH);
+            exit(-1);
+        }
     }
 
     close(fd); /* we can just close the file descripter after mmap */
@@ -195,7 +207,7 @@ int unlink_host_variable(host_variable p, const char *name, const size_t size)
     (void)name;
     int ret = 0;
     ret |= munmap(p, FULL_SIZE(size));
-   // ret |= shm_unlink(name);
+    ret |= shm_unlink(name);
     return ret;
 }
 

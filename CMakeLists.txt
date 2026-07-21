@@ -33,6 +33,18 @@ if(BUILD_CPP)
 endif()
 
 
+# get git commit hash
+add_custom_target(
+    GetGitHash ALL
+    COMMAND ${CMAKE_COMMAND}
+        -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/GetGitHash.cmake
+)
+
+include_directories(${CMAKE_CURRENT_BINARY_DIR})
+
+
 # build the shared library
 add_library(robot_ipc SHARED ${C_SRC_FILES} ${CPP_SRC_FILES})
 target_include_directories(robot_ipc
