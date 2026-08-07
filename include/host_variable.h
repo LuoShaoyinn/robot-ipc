@@ -20,6 +20,7 @@ int read_host_variable(host_variable p, void *buf, \
 int write_host_variable(host_variable p, const void *data, \
         const size_t size, const size_t op_size);
 void get_host_variable_timestamp(host_variable p, struct timespec *ret);
+// Unmap this process's handle. The shared-memory name remains available.
 int unlink_host_variable(host_variable p, const char *name, const size_t size);
 
 #ifdef __cplusplus

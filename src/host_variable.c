@@ -4,7 +4,6 @@
 #include <errno.h>
 #include <stdio.h>
 #include <unistd.h>
-#include <signal.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,12 +18,6 @@
 #include "host_variable.h"
 #include "config.h"
 #include "version.h"
-
-#ifndef NDEBUG
-/* the variable to indicate whether we should ignore the ctrl-C signal */
-uint8_t _host_variable_should_wait = 0;
-void (*_host_variable_next_handler)(int);
-#endif
 
 struct _s_host_variable {
     /* fixed-size metadata area reserved for future coordination fields */
@@ -78,53 +71,8 @@ get_compressed_timestamp()
 }
  
 
-#ifndef NDEBUG
-static void
-__handler_wrap(int signum)
-{
-    if(_host_variable_should_wait) return;
-    if(_host_variable_next_handler == SIG_IGN) return;
-    else if(_host_variable_next_handler == SIG_DFL) {
-        switch(signum) {
-        case 1:
-        case 2:
-        case 9:
-        case 13:
-        case 14:
-        case 15:
-            exit(0);
-        default:
-            return;
-        }
-    }
-    else 
-        _host_variable_next_handler(signum);
-}
-
-
-static void
-_set_handler_wrap()
-{
-    struct sigaction action;
-    if (sigaction(SIGINT, NULL, &action) == -1) return;
-    _host_variable_next_handler = action.sa_handler;
-    sigemptyset(&action.sa_mask);
-    action.sa_handler = __handler_wrap;
-    action.sa_flags &= ~SA_SIGINFO;
-    sigaction(SIGINT, &action, NULL);
-}
-#endif
-
 host_variable link_host_variable(const char *name, const size_t size)
 {
-
-#ifndef NDEBUG
-    /* we wrap the default handler for keyboard interrupt to 
-     * prevent exit while memory copying which may cause dead
-     * lock. */
-    _set_handler_wrap();
-#endif
-
     /* Try to open an existing and create if failed 
      *     0_CREAT | O_EXCL: create a new shared memory object
      *     O_RDWR: open for reading and writing
@@ -133,7 +81,7 @@ host_variable link_host_variable(const char *name, const size_t size)
     const size_t full_size = FULL_SIZE(size);
     host_variable p = NULL;
     int fd = shm_open(name, O_CREAT | O_EXCL | O_RDWR, 0600);
-    bool is_create = true;
+    bool is_create = (fd >= 0);
     if(fd < 0) {
         if(errno == EEXIST) {
             // open the existing shared memory object
@@ -144,9 +92,26 @@ host_variable link_host_variable(const char *name, const size_t size)
             goto FAILED;
     }
 
-    // Change the size of the shared memory object(file) to the required size
-    if(ftruncate(fd, full_size) == -1)
-        goto FAILED;
+    if(is_create) {
+        // Only the creator may size the shared memory object.
+        if(ftruncate(fd, full_size) == -1)
+            goto FAILED;
+    } else {
+        // The creator may not have reached ftruncate yet. Wait for it, but
+        // never resize an existing object on behalf of another process.
+        struct stat st;
+        while(true) {
+            if(fstat(fd, &st) == -1)
+                goto FAILED;
+            if((uintmax_t)st.st_size == (uintmax_t)full_size)
+                break;
+            if(st.st_size != 0) {
+                errno = EINVAL;
+                goto FAILED;
+            }
+            usleep(1000);
+        }
+    }
     
     // Map it into process's memory 
     p = (host_variable)mmap(
@@ -197,7 +162,8 @@ FAILED:
         close(fd);
     if ((void*)p != MAP_FAILED && p != NULL) 
         munmap(p, full_size);
-    shm_unlink(name);
+    if(is_create)
+        shm_unlink(name);
     return NULL;
 }
 
@@ -205,10 +171,7 @@ FAILED:
 int unlink_host_variable(host_variable p, const char *name, const size_t size)
 {
     (void)name;
-    int ret = 0;
-    ret |= munmap(p, FULL_SIZE(size));
-    ret |= shm_unlink(name);
-    return ret;
+    return munmap(p, FULL_SIZE(size));
 }
 
 
@@ -297,9 +260,10 @@ static inline int __release_write_lock(
 int read_host_variable(host_variable p, void *buf, \
         const size_t size, const size_t op_size)
 {
-#ifndef NDEBUG
-    _host_variable_should_wait = 1;
-#endif
+    if(op_size > size) {
+        errno = EINVAL;
+        return -1;
+    }
 
     /* add to the lock_cnt for the target buffer */
     int target = __acquire_read_lock(p);
@@ -310,10 +274,6 @@ int read_host_variable(host_variable p, void *buf, \
     memcpy(buf, p->data + target * size, op_size);    
 
 
-#ifndef NDEBUG
-    _host_variable_should_wait = 0;
-#endif
-
     return __release_read_lock(p, target);
 }
 
@@ -321,16 +281,19 @@ int read_host_variable(host_variable p, void *buf, \
 int write_host_variable(host_variable p, const void *data, \
         const size_t size, const size_t op_size)
 {
+    if(op_size > size) {
+        errno = EINVAL;
+        return -1;
+    }
+
     int target4; /* 4-times of the target buffer we're going to write to */
     int old_target; /* the current target buffer for reading */
     uint64_t timestamp = get_compressed_timestamp(); /* time since boot */
-    
-#ifndef NDEBUG
-    _host_variable_should_wait = 2;
-#endif
 
     /* first acquire a free buffer */
     target4 = __acquire_write_lock(p, &old_target);
+    if(target4 < 0)
+        return target4;
     
     /* then memcopy */
     p->timestamp[target4>>2] = timestamp;
@@ -338,10 +301,6 @@ int write_host_variable(host_variable p, const void *data, \
 
     /* finally set the buffer to free */
     __release_write_lock(p, target4, old_target, timestamp);
-    
-#ifndef NDEBUG
-    _host_variable_should_wait = 0;
-#endif
 
     return 0;
 }

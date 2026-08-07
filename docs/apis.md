@@ -29,7 +29,7 @@ Note that because host variables are underlying memory blocks, a POD structure m
     * **`op_size`**: Indicate how many bytes are really write to buffer. Suitable for non-fixed length data structure.
     * **`return`**: `0` on success, or an error code otherwise.
 * `int unlink_host_variable(host_variable p, const char* name, const size_t size)`
-    * **Description**: Unlink a host variable  
+    * **Description**: Unmap this process's host-variable handle. The shared-memory name is not removed.
     * **`p`**: The handle
     * **`name`**: The name of the host variable
     * **`size`**: The size.
