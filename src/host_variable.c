@@ -213,15 +213,16 @@ static inline int __release_read_lock(host_variable p, int target) {
 }
 
 
-static inline int __acquire_write_lock(host_variable p, int *old_target) {
+static inline int __acquire_write_lock(host_variable p) {
     int target4; /* 4-times of the target buffer we're going to write to */
+    int old_target;
     uint64_t flags, new_flags, free_mask;
 
     flags = atomic_load(&p->flags);
     while(true) {
-        *old_target = (flags >> 60ull);
+        old_target = (flags >> 60ull);
         free_mask = ~(flags | (flags >> 1) | (flags >> 2) | (flags >> 3) \
-                    | (0xFull << (*old_target)*4)) \
+                    | (0xFull << old_target*4)) \
                 & 0x0111111111111111ull;
         if(free_mask == 0)
             return -1; /* all buffers are full */
@@ -235,8 +236,9 @@ static inline int __acquire_write_lock(host_variable p, int *old_target) {
 
 
 static inline int __release_write_lock(
-        host_variable p, int target4, int old_target, uint64_t timestamp) {
-    uint64_t flags, new_flags, free_mask;
+        host_variable p, int target4, uint64_t timestamp) {
+    int old_target;
+    uint64_t flags, new_flags;
     flags = atomic_load(&p->flags);
     while(true) {
         old_target = (flags >> 60ull);
@@ -257,6 +259,91 @@ static inline int __release_write_lock(
 }
 
 
+int borrow_host_variable_read(host_variable p, const size_t size,
+        host_variable_read_loan *loan)
+{
+    if(p == NULL || loan == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    loan->variable = NULL;
+    loan->data = NULL;
+    loan->target = -1;
+
+    int target = __acquire_read_lock(p);
+    if(target < 0)
+        return target;
+
+    loan->variable = p;
+    loan->data = p->data + target * size;
+    loan->target = target;
+    return 0;
+}
+
+
+int release_host_variable_read(host_variable_read_loan *loan)
+{
+    if(loan == NULL || loan->variable == NULL
+            || loan->target < 0 || loan->target >= SHM_BUFFER_CNT) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    host_variable p = loan->variable;
+    int target = loan->target;
+    loan->variable = NULL;
+    loan->data = NULL;
+    loan->target = -1;
+    return __release_read_lock(p, target);
+}
+
+
+int borrow_host_variable_write(host_variable p, const size_t size,
+        host_variable_write_loan *loan)
+{
+    if(p == NULL || loan == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    loan->variable = NULL;
+    loan->data = NULL;
+    loan->target4 = -1;
+
+    int target4 = __acquire_write_lock(p);
+    if(target4 < 0)
+        return target4;
+
+    loan->variable = p;
+    loan->data = p->data + (target4 >> 2) * size;
+    loan->target4 = target4;
+    return 0;
+}
+
+
+int release_host_variable_write(host_variable_write_loan *loan)
+{
+    if(loan == NULL || loan->variable == NULL
+            || loan->target4 < 0
+            || loan->target4 >= SHM_BUFFER_CNT * 4
+            || (loan->target4 & 0x3) != 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    host_variable p = loan->variable;
+    int target4 = loan->target4;
+    uint64_t timestamp = get_compressed_timestamp();
+    atomic_store(&p->timestamp[target4 >> 2], timestamp);
+
+    loan->variable = NULL;
+    loan->data = NULL;
+    loan->target4 = -1;
+    return __release_write_lock(p, target4, timestamp);
+}
+
+
 int read_host_variable(host_variable p, void *buf, \
         const size_t size, const size_t op_size)
 {
@@ -265,16 +352,13 @@ int read_host_variable(host_variable p, void *buf, \
         return -1;
     }
 
-    /* add to the lock_cnt for the target buffer */
-    int target = __acquire_read_lock(p);
-    if(target < 0)
-        return target;
-     
-    /* copy the data */
-    memcpy(buf, p->data + target * size, op_size);    
+    host_variable_read_loan loan;
+    int result = borrow_host_variable_read(p, size, &loan);
+    if(result < 0)
+        return result;
 
-
-    return __release_read_lock(p, target);
+    memcpy(buf, loan.data, op_size);
+    return release_host_variable_read(&loan);
 }
 
 
@@ -286,23 +370,14 @@ int write_host_variable(host_variable p, const void *data, \
         return -1;
     }
 
-    int target4; /* 4-times of the target buffer we're going to write to */
-    int old_target; /* the current target buffer for reading */
-    uint64_t timestamp = get_compressed_timestamp(); /* time since boot */
+    host_variable_write_loan loan;
+    int result = borrow_host_variable_write(p, size, &loan);
+    if(result < 0)
+        return result;
 
-    /* first acquire a free buffer */
-    target4 = __acquire_write_lock(p, &old_target);
-    if(target4 < 0)
-        return target4;
-    
-    /* then memcopy */
-    p->timestamp[target4>>2] = timestamp;
-    memcpy(p->data + (target4>>2) * size, data, op_size);
-
-    /* finally set the buffer to free */
-    __release_write_lock(p, target4, old_target, timestamp);
-
-    return 0;
+    memcpy(loan.data, data, op_size);
+    result = release_host_variable_write(&loan);
+    return result < 0 ? result : 0;
 }
 
 

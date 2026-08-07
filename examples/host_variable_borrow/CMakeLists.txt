@@ -1,0 +1,5 @@
+add_executable(host_variable_borrow_test borrow_test.c)
+target_link_libraries(host_variable_borrow_test PRIVATE robot_ipc)
+set_target_properties(host_variable_borrow_test PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/host_variable_borrow"
+)

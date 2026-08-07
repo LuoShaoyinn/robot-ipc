@@ -11,6 +11,7 @@ mkdir -p "${ROBOT_IPC_LOG_DIR}"
 
 tests=(
   "scripts/ci/tests/host_variable_basic.sh"
+  "scripts/ci/tests/host_variable_borrow.sh"
   "scripts/ci/tests/host_variable_cross_language.sh"
   "scripts/ci/tests/host_variable_integrity.sh"
   "scripts/ci/tests/host_variable_latency.sh"

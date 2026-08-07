@@ -19,6 +19,7 @@ skip_test() {
 cleanup_ipc_artifacts() {
   rm -f \
     /dev/shm/host_variable \
+    /dev/shm/host_variable_borrow_test \
     /dev/shm/host_variable_struct \
     /dev/shm/test \
     /dev/shm/latency_test || true

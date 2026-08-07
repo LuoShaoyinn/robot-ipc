@@ -16,6 +16,17 @@ Note that because host variables are underlying memory blocks, a POD structure m
     * **`name`**: A unique string that identifies the variable.
     * **`size`**: The size of the variable in bytes. This must be the **same** across all processes interacting with this variable.
     * **`return`**: A valid `host_variable` handle, or `NULL` on error.
+* `int borrow_host_variable_read(host_variable p, size_t size, host_variable_read_loan* loan)`
+    * Pins the current readable buffer and returns a direct read-only pointer in `loan->data`.
+    * The pointer remains valid until `release_host_variable_read()` is called exactly once.
+* `int release_host_variable_read(host_variable_read_loan* loan)`
+    * Releases the pinned reader buffer and invalidates the loan.
+* `int borrow_host_variable_write(host_variable p, size_t size, host_variable_write_loan* loan)`
+    * Reserves a free buffer and returns a direct writable pointer in `loan->data`.
+    * Returns `-1` when no writable buffer is currently available.
+* `int release_host_variable_write(host_variable_write_loan* loan)`
+    * Generates the publication timestamp at release, then publishes the buffer or automatically discards it when a newer release already won.
+    * Returns `HOST_VARIABLE_WRITE_PUBLISHED`, `HOST_VARIABLE_WRITE_SUPERSEDED`, or `-1` for an invalid loan.
 * `int read_host_variable(host_variable p, void *buf, const size_t size, const size_t sop_size)`
     * **`p`**: A valid `host_variable` handle to read from.
     * **`buf`**: A pointer to a memory buffer where the data will be copied. The buffer must be at least as large as `size`.
